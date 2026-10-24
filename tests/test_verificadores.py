@@ -63,3 +63,50 @@ def test_nota_ponderada_e_gravacao(tmp_path):
     assert t.calcular_nota(tr) == 17.0
     t.gravar(tmp_path / "t.json")
     assert Tarefa.abrir(tmp_path / "t.json") == t
+
+
+def _livro_exemplo(caminho):
+    import openpyxl
+    from openpyxl.chart import BarChart, Reference
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Vendas"
+    ws.append(["Produto", "Qtd", "Preço", "Total"])
+    ws.append(["Caneta", 2, 1.5, "=B2*C2"])
+    ws.append(["Caderno", 3, 2, 6])  # total escrito à mão
+    ws.append(["Total", "=SUM(B2:B3)", None, "=SUM(D2:D3)"])
+    ws.append(["Média", 2.5])  # média escrita à mão
+    g = BarChart()
+    g.add_data(Reference(ws, min_col=4, min_row=1, max_row=3), titles_from_data=True)
+    ws.add_chart(g, "F2")
+    wb.save(caminho)
+
+
+def test_excel(tmp_path):
+    from corretor.verificadores.excel import ler_excel, verificar_excel
+
+    f = tmp_path / "t.xlsx"
+    _livro_exemplo(f)
+    res = verificar_excel(str(f))
+    texto = " ".join(v.mensagem for v in res)
+    assert "3 fórmula(s)" in texto
+    assert "SOMA" in texto
+    assert "Vendas!D3 (coluna 'Total')" in texto
+    assert "Vendas!B5 ('Média')" in texto
+    assert "1 gráfico(s)" in texto
+    conteudo = ler_excel(str(f))
+    assert "D2: =B2*C2" in conteudo and "Gráfico: BarChart" in conteudo
+
+
+def test_docx(tmp_path):
+    import zipfile
+
+    from corretor.verificadores import ler_ficheiro
+
+    f = tmp_path / "e.docx"
+    xml = ('<w:document xmlns:w="x"><w:body><w:p><w:r><w:t>Ficha 1 &amp; 2</w:t></w:r></w:p>'
+           '<w:p><w:r><w:t xml:space="preserve">Faz </w:t></w:r><w:r><w:t>um gráfico.</w:t></w:r></w:p></w:body></w:document>')
+    with zipfile.ZipFile(f, "w") as z:
+        z.writestr("word/document.xml", xml)
+    assert ler_ficheiro(str(f)) == "Ficha 1 & 2\nFaz um gráfico."

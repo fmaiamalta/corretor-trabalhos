@@ -11,6 +11,7 @@ TIPOS = {
     "css": "CSS",
     "web": "HTML + CSS",
     "python": "Python",
+    "excel": "Excel",
     "texto": "Texto / PDF (respostas escritas)",
 }
 
@@ -49,6 +50,7 @@ class AvaliacaoCriterio:
 class Trabalho:
     aluno: str
     ficheiros: list[str]
+    observacoes: str = ""  # opinião do professor, que a IA tem de seguir
     estado: str = "Por corrigir"
     verificacoes: list[Verificacao] = field(default_factory=list)
     avaliacoes: list[AvaliacaoCriterio] = field(default_factory=list)

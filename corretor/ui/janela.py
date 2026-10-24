@@ -15,9 +15,10 @@ from PySide6.QtWidgets import (
 
 from corretor.exportar import exportar_csv, exportar_feedback
 from corretor.modelos import TIPOS, AvaliacaoCriterio, Criterio, Tarefa, TestePython, Trabalho
-from corretor.verificadores import verificar
+from corretor.verificadores import ler_ficheiro, verificar
 
-FILTRO_FICHEIROS = "Trabalhos (*.html *.htm *.css *.py *.js *.txt *.md *.pdf);;Todos (*)"
+FILTRO_FICHEIROS = "Trabalhos (*.html *.htm *.css *.py *.js *.txt *.md *.pdf *.docx *.xlsx *.xlsm);;Todos (*)"
+FILTRO_ENUNCIADO = "Enunciados (*.pdf *.docx *.txt *.md *.xlsx);;Todos (*)"
 
 
 def _item(texto: str, editavel: bool = True) -> QTableWidgetItem:
@@ -102,7 +103,14 @@ class Janela(QMainWindow):
         self.sp_escala = QDoubleSpinBox()
         self.sp_escala.setRange(1, 100)
         self.ed_enunciado = QPlainTextEdit()
-        self.ed_enunciado.setPlaceholderText("Cola aqui o enunciado que deste aos alunos.")
+        self.ed_enunciado.setPlaceholderText("Cola aqui o enunciado que deste aos alunos, ou carrega-o de um ficheiro.")
+        bt_enunciado = QPushButton("Carregar enunciado de ficheiro...")
+        bt_enunciado.clicked.connect(self.carregar_enunciado)
+        caixa_enunciado = QWidget()
+        le = QVBoxLayout(caixa_enunciado)
+        le.setContentsMargins(0, 0, 0, 0)
+        le.addWidget(self.ed_enunciado)
+        le.addWidget(bt_enunciado, alignment=Qt.AlignLeft)
 
         self.tb_criterios = QTableWidget(0, 3)
         self.tb_criterios.setHorizontalHeaderLabels(["Critério", "Peso (%)", "O que se espera"])
@@ -143,10 +151,28 @@ class Janela(QMainWindow):
         form.addRow("Tipo de trabalho", self.cb_tipo)
         form.addRow("Nível", self.ed_nivel)
         form.addRow("Nota máxima", self.sp_escala)
-        form.addRow("Enunciado", self.ed_enunciado)
+        form.addRow("Enunciado", caixa_enunciado)
         form.addRow("Rubrica", crit)
         form.addRow("Testes", self.box_testes)
         return w
+
+    def carregar_enunciado(self) -> None:
+        caminho, _ = QFileDialog.getOpenFileName(self, "Enunciado", "", FILTRO_ENUNCIADO)
+        if not caminho:
+            return
+        try:
+            texto = ler_ficheiro(caminho)
+        except Exception as e:
+            QMessageBox.critical(self, "Enunciado", f"Não foi possível ler o ficheiro:\n{e}")
+            return
+        if not texto.strip():
+            QMessageBox.warning(self, "Enunciado", "O ficheiro não tem texto que se consiga ler (é uma imagem digitalizada?).")
+            return
+        if self.ed_enunciado.toPlainText().strip() and QMessageBox.question(
+            self, "Enunciado", "Substituir o enunciado que já está escrito?"
+        ) != QMessageBox.Yes:
+            return
+        self.ed_enunciado.setPlainText(texto)
 
     def _add_criterio(self) -> None:
         r = self.tb_criterios.rowCount()
@@ -269,7 +295,16 @@ class Janela(QMainWindow):
         ld.addWidget(self.lb_aluno)
         ld.addWidget(QLabel("Verificações automáticas"))
         self.ls_verif = QListWidget()
+        self.ls_verif.setWordWrap(True)
         ld.addWidget(self.ls_verif, 2)
+        ld.addWidget(QLabel("As tuas observações (a IA segue-as na nota e no feedback)"))
+        self.ed_obs = QPlainTextEdit()
+        self.ed_obs.setPlaceholderText("ex: O gráfico não é adequado aos dados. Usou valores fixos nos totais. A nota não deve passar de 14.")
+        self.ed_obs.textChanged.connect(self._obs_mudou)
+        ld.addWidget(self.ed_obs, 1)
+        self.bt_obs = QPushButton("Gerar correção com as minhas observações")
+        self.bt_obs.clicked.connect(lambda: self.corrigir(apenas_selecionado=True))
+        ld.addWidget(self.bt_obs, alignment=Qt.AlignRight)
         ld.addWidget(QLabel("Notas por critério (podes editar a nota e o comentário)"))
         self.tb_aval = QTableWidget(0, 3)
         self.tb_aval.setHorizontalHeaderLabels(["Critério", "Nota", "Comentário"])
@@ -378,18 +413,20 @@ class Janela(QMainWindow):
     def _mostrar_detalhe(self, i: int | None) -> None:
         self.atual = i
         ativo = i is not None and i < len(self.tarefa.trabalhos)
-        for w in (self.tb_aval, self.ed_resumo, self.ed_fortes, self.ed_sugestoes, self.bt_rever):
+        for w in (self.ed_obs, self.bt_obs, self.tb_aval, self.ed_resumo, self.ed_fortes, self.ed_sugestoes, self.bt_rever):
             w.setEnabled(ativo)
         self.ls_verif.clear()
         self.tb_aval.setRowCount(0)
         if not ativo:
             self.lb_aluno.setText("Seleciona um trabalho")
             self.lb_nota.setText("")
-            for ed in (self.ed_resumo, self.ed_fortes, self.ed_sugestoes):
+            for ed in (self.ed_obs, self.ed_resumo, self.ed_fortes, self.ed_sugestoes):
                 ed.setPlainText("")
             return
         t = self.tarefa.trabalhos[i]
         self.lb_aluno.setText(t.aluno)
+        if self.ed_obs.toPlainText() != t.observacoes:
+            self.ed_obs.setPlainText(t.observacoes)
         for v in t.verificacoes:
             it = QListWidgetItem(("✔ " if v.ok else "✘ ") + v.mensagem)
             it.setForeground(QColor("#1a7f37" if v.ok else "#cf222e"))
@@ -408,6 +445,10 @@ class Janela(QMainWindow):
         self.ed_sugestoes.setPlainText("\n".join(t.sugestoes))
         nota = f"{t.nota_final:g} / {self.tarefa.escala:g}" if t.nota_final is not None else "sem nota"
         self.lb_nota.setText(f"Nota final: <b>{nota}</b>" + (" (revisto)" if t.revisto else ""))
+
+    def _obs_mudou(self) -> None:
+        if self.atual is not None and self.atual < len(self.tarefa.trabalhos):
+            self.tarefa.trabalhos[self.atual].observacoes = self.ed_obs.toPlainText()
 
     def guardar_revisao(self) -> None:
         if self.atual is None:
